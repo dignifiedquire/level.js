@@ -1,7 +1,11 @@
 var util = require('util')
 var AbstractIterator  = require('abstract-leveldown').AbstractIterator
 var ltgt = require('ltgt')
+var idbReadableStream = require('idb-readable-stream')
+var stream = require('stream')
 var xtend = require('xtend')
+
+var Writable = stream.Writable
 
 module.exports = Iterator
 
@@ -12,39 +16,39 @@ module.exports = Iterator
  * @param {Object} [options]  options
  *
  * options:
- *   reopenOnTimeout {Boolean}  Reopen a new cursor if it times out. This can
- *                              happen if _next is not called fast enough. Every
- *                              time the cursor is reopened it operates on a new
- *                              snapshot of the database. This option is false
- *                              by default.
+ *   snapshot {Boolean}  Whether to use snapshot mode, that may lead to memory
+ *     spikes, or use back pressure, that can't guarantee the same snapshot. This
+ *     option is true by default.
  */
 function Iterator(db, options) {
   this._db = db._db
   this._idbOpts = db._idbOpts
 
-  if (options == null) options = {}
-
   AbstractIterator.call(this, db)
 
-  this._limit = options.limit;
+  this._options = xtend({
+    snapshot: true
+  }, this._idbOpts, options)
+
+  this._limit = this._options.limit
   if (this._limit == null || this._limit === -1) {
-    this._limit = Infinity;
+    this._limit = Infinity
   }
   if (typeof this._limit !== 'number') throw new TypeError('options.limit must be a number')
   if (this._limit === 0) return // skip further processing and wait for first call to _next
 
-  this._reopenOnTimeout = !!options.reopenOnTimeout
-
   this._count = 0
-  this._cursorsStarted = 0
-  this._lastIteratedKey = null
 
-  this._startCursor(options)
+  this._startCursor(this._options)
 }
 
 util.inherits(Iterator, AbstractIterator)
 
 Iterator.prototype._startCursor = function(options) {
+  options = xtend(this._options, options)
+
+  var self = this
+
   var keyRange = null
   var lower = ltgt.lowerBound(options)
   var upper = ltgt.upperBound(options)
@@ -53,24 +57,11 @@ Iterator.prototype._startCursor = function(options) {
 
   var direction = options.reverse ? 'prev': 'next'
 
-  options = xtend(this._idbOpts, options)
-
   // support binary keys for any iterable type via array (ArrayBuffers as keys are only supported in IndexedDB Second Edition)
   if (lower)
     if (options.keyEncoding === 'binary' && !Array.isArray(lower)) lower = Array.prototype.slice.call(lower)
   if (upper)
     if (options.keyEncoding === 'binary' && !Array.isArray(upper)) upper = Array.prototype.slice.call(upper)
-
-  // if this is not the first iteration, use lastIteratedKey
-  if (this._lastIteratedKey) {
-    if (direction === 'next') {
-      lowerOpen = true
-      lower = this._lastIteratedKey
-    } else {
-      upperOpen = true
-      upper = this._lastIteratedKey
-    }
-  }
 
   if (lower && upper)
     try {
@@ -78,104 +69,100 @@ Iterator.prototype._startCursor = function(options) {
     } catch (err) {
       // skip the iterator and return 0 results if IDBKeyRange throws a DataError (if keys overlap)
       this._keyRangeError = true
-      return;
+      return
     }
   else if (lower)
     keyRange = IDBKeyRange.lowerBound(lower, lowerOpen)
   else if (upper)
     keyRange = IDBKeyRange.upperBound(upper, upperOpen)
 
-  var tx = this._db.transaction(this._idbOpts.storeName)
-  var req = tx.objectStore(this._idbOpts.storeName).openCursor(keyRange, direction)
+  this._reader = idbReadableStream(this._db, this._idbOpts.storeName, xtend(options, { range: keyRange, direction: direction }))
 
-  this._cursorsStarted++
+  this._reader.on('error', function(err) {
+    var cb = self._callback
+    self._callback = false
 
-  var self = this
+    if (cb)
+      cb(err)
+    else // else wait for _next
+      self._readNext = function(cb) {
+        cb(err)
+      }
+  })
 
-  tx.onabort = function() {
-    if (self._callback) {
-      var cb = self._callback
+  this._reader.pipe(new Writable({
+    objectMode: true,
+    write: function(item, enc, cb) {
+      if (self._count++ >= self._limit) { // limit reached, finish
+        self._reader.pause()
+        self._reader.unpipe(this)
+        cb()
+        this.end()
+        return
+      }
+
+      var cb2 = self._callback
       self._callback = false
-      cb(tx.error)
-    } else  {
-      // ensure a next handler, overwrite if necessary
-      self._nextHandler = function(cb) {
-        cb(tx.error)
-      }
-    }
-  }
 
-  // register a next handler, only call it directly if a callback is registered
-  req.onsuccess = function() {
-    if (self._nextHandler) throw new Error('nextHandler already exists')
-
-    var cursor = req.result
-
-    if (cursor) {
-      var key = cursor.key
-      var value = cursor.value
-
-      self._lastIteratedKey = key
-
-      // automatically convert Uint8Array values to Buffer
-      if (value instanceof Uint8Array) value = new Buffer(value)
-      if (options.keyEncoding === 'binary' && Array.isArray(key)) key = new Buffer(key)
-      if (options.valueEncoding === 'binary' && !Buffer.isBuffer(value)) value = new Buffer(value)
-
-      if (options.keyAsBuffer && !Buffer.isBuffer(key)) {
-        if (key == null)                     key = new Buffer(0)
-        else if (typeof key === 'string')    key = new Buffer(key) // defaults to utf8, should the encoding be utf16? (DOMString)
-        else if (typeof key === 'boolean')   key = new Buffer(String(key)) // compatible with leveldb
-        else if (typeof key === 'number')    key = new Buffer(String(key)) // compatible with leveldb
-        else if (Array.isArray(key))         key = new Buffer(String(key)) // compatible with leveldb
-        else if (key instanceof Uint8Array)  key = new Buffer(key)
-        else throw new TypeError('can\'t coerce `' + key.constructor.name + '` into a Buffer')
-      }
-
-      if (options.valueAsBuffer && !Buffer.isBuffer(value)) {
-        if (value == null)                     value = new Buffer(0)
-        else if (typeof value === 'string')    value = new Buffer(value) // defaults to utf8, should the encoding be utf16? (DOMString)
-        else if (typeof value === 'boolean')   value = new Buffer(String(value)) // compatible with leveldb
-        else if (typeof value === 'number')    value = new Buffer(String(value)) // compatible with leveldb
-        else if (Array.isArray(value))         value = new Buffer(String(value)) // compatible with leveldb
-        else if (value instanceof Uint8Array)  value = new Buffer(value)
-        else throw new TypeError('can\'t coerce `' + value.constructor.name + '` into a Buffer')
-      }
-
-      if (self._count++ < self._limit) {
-        // emit this item, unless the cursor gives a timeout error
-        self._nextHandler = function(cb) {
-          if (self._ended) {
-            cb(null, key, value)
-          } else { // only continue the cursor if the stream is not ended by the user
-            try {
-              cursor.continue() // throws a TransactionInactiveError if the cursor timed out
-              cb(null, key, value)
-            } catch(err) {
-              // either reopen and emit the current cursor value or propagate the error
-              if (err.name === 'TransactionInactiveError' && self._reopenOnTimeout) {
-                cb(null, key, value)
-                self._startCursor(options) // indexedDB timed out the cursor
-              } else cb(err)
-            }
-          }
+      if (cb2)
+        self._processItem(item, function(err, key, value) {
+          cb(err) // proceed with next item
+          cb2(err, key, value)
+        })
+      else // else wait for _next
+        self._readNext = function(cb2) {
+          self._processItem(item, function(err, key, value) {
+            cb(err) // proceed with next item
+            cb2(err, key, value)
+          })
         }
-      } else { // limit reached, finish and let the cursor timeout
-        self._nextHandler = function(cb) { cb() }
-      }
-    } else { // end of cursor reached, finish
-      self._nextHandler = function(cb) { cb() }
-    }
 
-    if (self._callback) {
-      // fix state before calling the callback since the callback itself might invoke a new call to next synchronously
-      var nh = self._nextHandler.bind(self)
-      var cb = self._callback
-      self._nextHandler = false
-      self._callback = false
-      nh(cb) // since this is async compared to when the callback was registered, call it synchronously
     }
+  })).on('finish', function() {
+    var cb = self._callback
+    self._callback = false
+
+    if (cb)
+      cb()
+    else // else wait for _next
+      self._readNext = function(cb) {
+        cb()
+      }
+  })
+}
+
+Iterator.prototype._processItem = function(item, cb) {
+  if (typeof cb !== 'function') throw new TypeError('cb must be a function')
+
+  var key = item.key
+  var value = item.value
+
+  // automatically convert Uint8Array values to Buffer
+  if (value instanceof Uint8Array) value = new Buffer(value)
+  if (this._options.keyEncoding === 'binary' && Array.isArray(key)) key = new Buffer(key)
+  if (this._options.valueEncoding === 'binary' && !Buffer.isBuffer(value)) value = new Buffer(value)
+
+  if (this._options.keyAsBuffer && !Buffer.isBuffer(key)) {
+    if (key == null)                     key = new Buffer(0)
+    else if (typeof key === 'string')    key = new Buffer(key) // defaults to utf8, should the encoding be utf16? (DOMString)
+    else if (typeof key === 'boolean')   key = new Buffer(String(key)) // compatible with leveldb
+    else if (typeof key === 'number')    key = new Buffer(String(key)) // compatible with leveldb
+    else if (Array.isArray(key))         key = new Buffer(String(key)) // compatible with leveldb
+    else if (key instanceof Uint8Array)  key = new Buffer(key)
+    else throw new TypeError('can\'t coerce `' + key.constructor.name + '` into a Buffer')
   }
+
+  if (this._options.valueAsBuffer && !Buffer.isBuffer(value)) {
+    if (value == null)                     value = new Buffer(0)
+    else if (typeof value === 'string')    value = new Buffer(value) // defaults to utf8, should the encoding be utf16? (DOMString)
+    else if (typeof value === 'boolean')   value = new Buffer(String(value)) // compatible with leveldb
+    else if (typeof value === 'number')    value = new Buffer(String(value)) // compatible with leveldb
+    else if (Array.isArray(value))         value = new Buffer(String(value)) // compatible with leveldb
+    else if (value instanceof Uint8Array)  value = new Buffer(value)
+    else throw new TypeError('can\'t coerce `' + value.constructor.name + '` into a Buffer')
+  }
+
+  cb(null, key, value)
 }
 
 // register a callback, only call it directly if a nextHandler is registered
@@ -183,15 +170,14 @@ Iterator.prototype._next = function(callback) {
   if (this._callback) throw new Error('callback already exists') // each callback should be invoked exactly once
   if (this._keyRangeError || this._limit === 0) return void callback()
 
-  this._callback = callback
+  var readNext = this._readNext
+  this._readNext = false
 
-  if (this._nextHandler) {
-    var nh = this._nextHandler.bind(nh)
-    this._nextHandler = false
-    this._callback = false
-    // nextHandler is sync, cb should be invoked async
+  if (readNext) {
     process.nextTick(function() {
-      nh(callback)
+      readNext(callback)
     })
+  } else {
+    this._callback = callback
   }
 }
