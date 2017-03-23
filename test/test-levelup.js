@@ -1,4 +1,4 @@
-/*** Levelup tests 
+/** * Levelup tests
   (the actual test suite isnt runnable in browser, and these arent complete)
 ***/
 var levelup = require('levelup')
@@ -6,9 +6,9 @@ var leveljs = require('../')
 
 window.db = levelup('foo', { db: leveljs })
 
-db.put('name', 'LevelUP string', function (err) {
+window.db.put('name', 'LevelUP string', function (err) {
   if (err) return console.log('Ooops!', err) // some kind of I/O error
-  db.get('name', function (err, value) {
+  window.db.get('name', function (err, value) {
     if (err) return console.log('Ooops!', err) // likely the key was not found
     console.log('name=' + value)
   })
@@ -16,35 +16,35 @@ db.put('name', 'LevelUP string', function (err) {
 
 var ary = new Uint8Array(1)
 ary[0] = 1
-db.put('binary', ary, function (err) {
+window.db.put('binary', ary, function (err) {
   if (err) return console.log('Ooops!', err) // some kind of I/O error
-  db.get('binary', function (err, value) {
+  window.db.get('binary', function (err, value) {
     if (err) return console.log('Ooops!', err) // likely the key was not found
     console.log('binary', value)
   })
 })
 
-var writeStream = db.createWriteStream()
+var writeStream = window.db.createWriteStream()
 writeStream.on('error', function (err) {
   console.log('Oh my!', err)
 })
 writeStream.on('close', function () {
   console.log('Stream closed')
-  db.createKeyStream()
+  window.db.createKeyStream()
     .on('data', function (data) {
       console.log('KEYSTREAM', data)
     })
     .on('error', function (err) {
       console.log('Oh my!', err)
     })
-  db.createReadStream()
+  window.db.createReadStream()
     .on('data', function (data) {
       console.log('READSTREAM', data.key, '=', data.value)
     })
     .on('error', function (err) {
       console.log('Oh my!', err)
     })
-  db.createValueStream()
+  window.db.createValueStream()
     .on('data', function (data) {
       console.log('VALUESTREAM', data)
     })

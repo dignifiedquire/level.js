@@ -5,7 +5,7 @@ var util = require('util')
 var Iterator = require('./iterator')
 var xtend = require('xtend')
 
-function Level(location) {
+function Level (location) {
   if (!(this instanceof Level)) return new Level(location)
 
   AbstractLevelDOWN.call(this, location)
@@ -20,7 +20,7 @@ util.inherits(Level, AbstractLevelDOWN)
  *                            open and createObjectStore.
  * @param {Function} callback  First parameter will be an error object or null.
  */
-Level.prototype._open = function(options, callback) {
+Level.prototype._open = function (options, callback) {
   var self = this
 
   // assume createIfMissing and errorIfExists are initialized by abstract-leveldown
@@ -34,19 +34,19 @@ Level.prototype._open = function(options, callback) {
   if (this._idbOpts.idb) {
     onsuccess(this._idbOpts.idb)
   } else {
-    var req = indexedDB.open(this.location) // use the databases current version
+    var req = window.indexedDB.open(this.location) // use the databases current version
     req.onerror = onerror
-    req.onsuccess = function() {
+    req.onsuccess = function () {
       onsuccess(req.result)
     }
   }
 
-  function onerror(ev) {
+  function onerror (ev) {
     callback(ev.target.error)
   }
 
   // if the store does not exist and createIfMissing is true, create the object store
-  function onsuccess(db) {
+  function onsuccess (db) {
     self._db = db
 
     var exists = self._db.objectStoreNames.contains(self._idbOpts.storeName)
@@ -66,18 +66,18 @@ Level.prototype._open = function(options, callback) {
     if (options.createIfMissing && !exists) {
       self._db.close()
 
-      var req2 = indexedDB.open(self.location, self._db.version + 1)
+      var req2 = window.indexedDB.open(self.location, self._db.version + 1)
 
-      req2.onerror = function(ev) {
+      req2.onerror = function (ev) {
         callback(ev.target.error)
       }
 
-      req2.onupgradeneeded = function() {
+      req2.onupgradeneeded = function () {
         var db = req2.result
         db.createObjectStore(self._idbOpts.storeName, self._idbOpts)
       }
 
-      req2.onsuccess = function() {
+      req2.onsuccess = function () {
         self._db = req2.result
         callback(null, self)
       }
@@ -89,7 +89,7 @@ Level.prototype._open = function(options, callback) {
   }
 }
 
-Level.prototype._get = function(key, options, callback) {
+Level.prototype._get = function (key, options, callback) {
   options = xtend(this._idbOpts, options)
 
   var origKey = key
@@ -98,13 +98,13 @@ Level.prototype._get = function(key, options, callback) {
   if (options.keyEncoding === 'binary' && !Array.isArray(key)) key = Array.prototype.slice.call(key)
 
   var tx = this._db.transaction(this._idbOpts.storeName)
-  var req = tx.objectStore(this._idbOpts.storeName).openCursor(IDBKeyRange.only(key))
+  var req = tx.objectStore(this._idbOpts.storeName).openCursor(window.IDBKeyRange.only(key))
 
-  tx.onabort = function() {
+  tx.onabort = function () {
     callback(tx.error)
   }
 
-  req.onsuccess = function() {
+  req.onsuccess = function () {
     var cursor = req.result
     if (cursor) {
       var value = cursor.value
@@ -114,12 +114,12 @@ Level.prototype._get = function(key, options, callback) {
       if (options.valueEncoding === 'binary' && !Buffer.isBuffer(value)) value = new Buffer(value)
 
       if (options.asBuffer && !Buffer.isBuffer(value)) {
-        if (value == null)                     value = new Buffer(0)
-        else if (typeof value === 'string')    value = new Buffer(value) // defaults to utf8, should the encoding be utf16? (DOMString)
-        else if (typeof value === 'boolean')   value = new Buffer(String(value)) // compatible with leveldb
-        else if (typeof value === 'number')    value = new Buffer(String(value)) // compatible with leveldb
-        else if (Array.isArray(value))         value = new Buffer(String(value)) // compatible with leveldb
-        else if (value instanceof Uint8Array)  value = new Buffer(value)
+        if (value == null) value = new Buffer(0)
+        else if (typeof value === 'string') value = new Buffer(value) // defaults to utf8, should the encoding be utf16? (DOMString)
+        else if (typeof value === 'boolean') value = new Buffer(String(value)) // compatible with leveldb
+        else if (typeof value === 'number') value = new Buffer(String(value)) // compatible with leveldb
+        else if (Array.isArray(value)) value = new Buffer(String(value)) // compatible with leveldb
+        else if (value instanceof Uint8Array) value = new Buffer(value)
         else return void callback(new TypeError('can\'t coerce `' + value.constructor.name + '` into a Buffer'))
       }
       return void callback(null, value, origKey)
@@ -130,7 +130,7 @@ Level.prototype._get = function(key, options, callback) {
   }
 }
 
-Level.prototype._del = function(key, options, callback) {
+Level.prototype._del = function (key, options, callback) {
   options = xtend(this._idbOpts, options)
 
   // support binary keys for any iterable type via array (ArrayBuffers as keys are only supported in IndexedDB Second Edition)
@@ -141,18 +141,19 @@ Level.prototype._del = function(key, options, callback) {
     mode = 'readwriteflush' // only supported in Firefox (with "dom.indexedDB.experimental" pref set to true)
   }
   var tx = this._db.transaction(this._idbOpts.storeName, mode)
-  var req = tx.objectStore(this._idbOpts.storeName).delete(key)
+  /* var req = */
+  tx.objectStore(this._idbOpts.storeName).delete(key)
 
-  tx.onabort = function() {
+  tx.onabort = function () {
     callback(tx.error)
   }
 
-  tx.oncomplete = function() {
+  tx.oncomplete = function () {
     callback()
   }
 }
 
-Level.prototype._put = function(key, value, options, callback) {
+Level.prototype._put = function (key, value, options, callback) {
   options = xtend(this._idbOpts, options)
 
   // support binary keys for any iterable type via array (ArrayBuffers as keys are only supported in IndexedDB Second Edition)
@@ -163,23 +164,24 @@ Level.prototype._put = function(key, value, options, callback) {
     mode = 'readwriteflush' // only supported in Firefox (with "dom.indexedDB.experimental" pref set to true)
   }
   var tx = this._db.transaction(this._idbOpts.storeName, mode)
-  var req = tx.objectStore(this._idbOpts.storeName).put(value, key)
+  /* var req = */
+  tx.objectStore(this._idbOpts.storeName).put(value, key)
 
-  tx.onabort = function() {
+  tx.onabort = function () {
     callback(tx.error)
   }
 
-  tx.oncomplete = function() {
+  tx.oncomplete = function () {
     callback()
   }
 }
 
-Level.prototype._iterator = function(options) {
+Level.prototype._iterator = function (options) {
   return new Iterator(this, options)
 }
 
 // only support sync: true on batch level, not operation level
-Level.prototype._batch = function(array, options, callback) {
+Level.prototype._batch = function (array, options, callback) {
   if (array.length === 0) return process.nextTick(callback)
 
   var mode = 'readwrite'
@@ -189,15 +191,15 @@ Level.prototype._batch = function(array, options, callback) {
   var tx = this._db.transaction(this._idbOpts.storeName, mode)
   var store = tx.objectStore(this._idbOpts.storeName)
 
-  tx.onabort = function() {
+  tx.onabort = function () {
     callback(tx.error)
   }
 
-  tx.oncomplete = function() {
+  tx.oncomplete = function () {
     callback()
   }
 
-  array.forEach(function(currentOp) {
+  array.forEach(function (currentOp) {
     var opts = xtend(options, currentOp)
 
     // support binary keys for any iterable type via array (ArrayBuffers as keys are only supported in IndexedDB Second Edition)
@@ -218,10 +220,11 @@ Level.prototype._close = function (callback) {
 
 Level.prototype._approximateSize = function (start, end, callback) {
   var err = new Error('Not implemented')
-  if (callback)
-    return void process.nextTick(function() {
+  if (callback) {
+    return void process.nextTick(function () {
       callback(err)
     })
+  }
 
   throw err
 }
@@ -231,7 +234,7 @@ Level.prototype._approximateSize = function (start, end, callback) {
  *
  * @param {String|Object} location  Name of the database or a database instance.
  */
-Level.destroy = function(db, callback) {
+Level.destroy = function (db, callback) {
   var idbOpts
   if (db != null && typeof db === 'object') {
     idbOpts = xtend({
@@ -250,22 +253,22 @@ Level.destroy = function(db, callback) {
   if (typeof idbOpts.location !== 'string') throw new TypeError('location must be a string')
   if (typeof idbOpts.storeName !== 'string') throw new TypeError('db.storeName must be a string')
 
-  var req = indexedDB.open(idbOpts.location) // use the databases current version
+  var req = window.indexedDB.open(idbOpts.location) // use the databases current version
 
-  req.onerror = function(ev) {
+  req.onerror = function (ev) {
     callback(ev.target.error)
   }
 
   // if the database contains no other stores, delete the database as well
-  req.onsuccess = function() {
+  req.onsuccess = function () {
     var db = req.result
 
-    function deleteDatabase(name) {
-      var req2 = indexedDB.deleteDatabase(name)
-      req2.onerror = function(ev) {
+    function deleteDatabase (name) {
+      var req2 = window.indexedDB.deleteDatabase(name)
+      req2.onerror = function (ev) {
         callback(ev.target.error)
       }
-      req2.onsuccess = function() {
+      req2.onsuccess = function () {
         callback()
       }
     }
@@ -276,18 +279,18 @@ Level.destroy = function(db, callback) {
     if (!db.objectStoreNames.contains(idbOpts.storeName)) return void callback()
 
     // delete object store, and if no object stores remain, delete database
-    var req2 = indexedDB.open(idbOpts.location, db.version + 1)
+    var req2 = window.indexedDB.open(idbOpts.location, db.version + 1)
 
-    req2.onerror = function(ev) {
+    req2.onerror = function (ev) {
       callback(ev.target.error)
     }
 
-    req2.onupgradeneeded = function() {
+    req2.onupgradeneeded = function () {
       db = req2.result
       db.deleteObjectStore(idbOpts.storeName)
     }
 
-    req2.onsuccess = function() {
+    req2.onsuccess = function () {
       db = req2.result
       db.close()
 

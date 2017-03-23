@@ -1,5 +1,5 @@
 var util = require('util')
-var AbstractIterator  = require('abstract-leveldown').AbstractIterator
+var AbstractIterator = require('abstract-leveldown').AbstractIterator
 var ltgt = require('ltgt')
 var idbReadableStream = require('idb-readable-stream')
 var stream = require('stream')
@@ -20,7 +20,7 @@ module.exports = Iterator
  *     spikes, or use back pressure, that can't guarantee the same snapshot. This
  *     option is true by default.
  */
-function Iterator(db, options) {
+function Iterator (db, options) {
   this._db = db._db
   this._idbOpts = db._idbOpts
 
@@ -44,7 +44,7 @@ function Iterator(db, options) {
 
 util.inherits(Iterator, AbstractIterator)
 
-Iterator.prototype._startCursor = function(options) {
+Iterator.prototype._startCursor = function (options) {
   options = xtend(this._options, options)
 
   var self = this
@@ -55,44 +55,43 @@ Iterator.prototype._startCursor = function(options) {
   var lowerOpen = ltgt.lowerBoundExclusive(options)
   var upperOpen = ltgt.upperBoundExclusive(options)
 
-  var direction = options.reverse ? 'prev': 'next'
+  var direction = options.reverse ? 'prev' : 'next'
 
   // support binary keys for any iterable type via array (ArrayBuffers as keys are only supported in IndexedDB Second Edition)
-  if (lower)
-    if (options.keyEncoding === 'binary' && !Array.isArray(lower)) lower = Array.prototype.slice.call(lower)
-  if (upper)
-    if (options.keyEncoding === 'binary' && !Array.isArray(upper)) upper = Array.prototype.slice.call(upper)
+  if (lower) { if (options.keyEncoding === 'binary' && !Array.isArray(lower)) lower = Array.prototype.slice.call(lower) }
+  if (upper) { if (options.keyEncoding === 'binary' && !Array.isArray(upper)) upper = Array.prototype.slice.call(upper) }
 
-  if (lower && upper)
+  if (lower && upper) {
     try {
-      keyRange = IDBKeyRange.bound(lower, upper, lowerOpen, upperOpen)
+      keyRange = window.IDBKeyRange.bound(lower, upper, lowerOpen, upperOpen)
     } catch (err) {
       // skip the iterator and return 0 results if IDBKeyRange throws a DataError (if keys overlap)
       this._keyRangeError = true
       return
     }
-  else if (lower)
-    keyRange = IDBKeyRange.lowerBound(lower, lowerOpen)
-  else if (upper)
-    keyRange = IDBKeyRange.upperBound(upper, upperOpen)
+  } else if (lower) {
+    keyRange = window.IDBKeyRange.lowerBound(lower, lowerOpen)
+  } else if (upper) {
+    keyRange = window.IDBKeyRange.upperBound(upper, upperOpen)
+  }
 
   this._reader = idbReadableStream(this._db, this._idbOpts.storeName, xtend(options, { range: keyRange, direction: direction }))
 
-  this._reader.on('error', function(err) {
+  this._reader.on('error', function (err) {
     var cb = self._callback
     self._callback = false
 
-    if (cb)
-      cb(err)
-    else // else wait for _next
-      self._readNext = function(cb) {
+    if (cb) { cb(err) } else {
+      // else wait for _next
+      self._readNext = function (cb) {
         cb(err)
       }
+    }
   })
 
   this._reader.pipe(new Writable({
     objectMode: true,
-    write: function(item, enc, cb) {
+    write: function (item, enc, cb) {
       if (self._count++ >= self._limit) { // limit reached, finish
         self._reader.pause()
         self._reader.unpipe(this)
@@ -104,34 +103,37 @@ Iterator.prototype._startCursor = function(options) {
       var cb2 = self._callback
       self._callback = false
 
-      if (cb2)
-        self._processItem(item, function(err, key, value) {
+      if (cb2) {
+        self._processItem(item, function (err, key, value) {
           cb(err) // proceed with next item
           cb2(err, key, value)
         })
-      else // else wait for _next
-        self._readNext = function(cb2) {
-          self._processItem(item, function(err, key, value) {
+      } else {
+        // else wait for _next
+        self._readNext = function (cb2) {
+          self._processItem(item, function (err, key, value) {
             cb(err) // proceed with next item
             cb2(err, key, value)
           })
         }
-
+      }
     }
-  })).on('finish', function() {
+  })).on('finish', function () {
     var cb = self._callback
     self._callback = false
 
-    if (cb)
+    if (cb) {
       cb()
-    else // else wait for _next
-      self._readNext = function(cb) {
+    } else {
+      // else wait for _next
+      self._readNext = function (cb) {
         cb()
       }
+    }
   })
 }
 
-Iterator.prototype._processItem = function(item, cb) {
+Iterator.prototype._processItem = function (item, cb) {
   if (typeof cb !== 'function') throw new TypeError('cb must be a function')
 
   var key = item.key
@@ -143,22 +145,22 @@ Iterator.prototype._processItem = function(item, cb) {
   if (this._options.valueEncoding === 'binary' && !Buffer.isBuffer(value)) value = new Buffer(value)
 
   if (this._options.keyAsBuffer && !Buffer.isBuffer(key)) {
-    if (key == null)                     key = new Buffer(0)
-    else if (typeof key === 'string')    key = new Buffer(key) // defaults to utf8, should the encoding be utf16? (DOMString)
-    else if (typeof key === 'boolean')   key = new Buffer(String(key)) // compatible with leveldb
-    else if (typeof key === 'number')    key = new Buffer(String(key)) // compatible with leveldb
-    else if (Array.isArray(key))         key = new Buffer(String(key)) // compatible with leveldb
-    else if (key instanceof Uint8Array)  key = new Buffer(key)
+    if (key == null) key = new Buffer(0)
+    else if (typeof key === 'string') key = new Buffer(key) // defaults to utf8, should the encoding be utf16? (DOMString)
+    else if (typeof key === 'boolean') key = new Buffer(String(key)) // compatible with leveldb
+    else if (typeof key === 'number') key = new Buffer(String(key)) // compatible with leveldb
+    else if (Array.isArray(key)) key = new Buffer(String(key)) // compatible with leveldb
+    else if (key instanceof Uint8Array) key = new Buffer(key)
     else throw new TypeError('can\'t coerce `' + key.constructor.name + '` into a Buffer')
   }
 
   if (this._options.valueAsBuffer && !Buffer.isBuffer(value)) {
-    if (value == null)                     value = new Buffer(0)
-    else if (typeof value === 'string')    value = new Buffer(value) // defaults to utf8, should the encoding be utf16? (DOMString)
-    else if (typeof value === 'boolean')   value = new Buffer(String(value)) // compatible with leveldb
-    else if (typeof value === 'number')    value = new Buffer(String(value)) // compatible with leveldb
-    else if (Array.isArray(value))         value = new Buffer(String(value)) // compatible with leveldb
-    else if (value instanceof Uint8Array)  value = new Buffer(value)
+    if (value == null) value = new Buffer(0)
+    else if (typeof value === 'string') value = new Buffer(value) // defaults to utf8, should the encoding be utf16? (DOMString)
+    else if (typeof value === 'boolean') value = new Buffer(String(value)) // compatible with leveldb
+    else if (typeof value === 'number') value = new Buffer(String(value)) // compatible with leveldb
+    else if (Array.isArray(value)) value = new Buffer(String(value)) // compatible with leveldb
+    else if (value instanceof Uint8Array) value = new Buffer(value)
     else throw new TypeError('can\'t coerce `' + value.constructor.name + '` into a Buffer')
   }
 
@@ -166,7 +168,7 @@ Iterator.prototype._processItem = function(item, cb) {
 }
 
 // register a callback, only call it directly if a nextHandler is registered
-Iterator.prototype._next = function(callback) {
+Iterator.prototype._next = function (callback) {
   if (this._callback) throw new Error('callback already exists') // each callback should be invoked exactly once
   if (this._keyRangeError || this._limit === 0) return void callback()
 
@@ -174,7 +176,7 @@ Iterator.prototype._next = function(callback) {
   this._readNext = false
 
   if (readNext) {
-    process.nextTick(function() {
+    process.nextTick(function () {
       readNext(callback)
     })
   } else {
